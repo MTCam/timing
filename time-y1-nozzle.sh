@@ -1,7 +1,9 @@
-#! /bin/bash
+#!/bin/bash
 
 set -e
 set -x
+
+date
 
 TIMING_HOME=$(pwd)
 TIMING_HOST=$(hostname)
@@ -40,17 +42,28 @@ git branch -D temp || true
 git switch -c temp
 git merge y1_production --no-edit
 
-# -- Grab the repo with the nozzle driver
+# -- Produce the driver to use for timing
+# --- Grab the nozzle driver repo
 rm -Rf CEESD-Y1_nozzle
 git clone https://github.com/anderson2981/CEESD-Y1_nozzle.git
-
-
-# -- Edit the driver for:
-# --- 20 steps
-# --- no i/o
-# --- desired file namings
 cd CEESD-Y1_nozzle/startup
 DRIVER_HASH=$(git rev-parse main)
+
+# --- DEVELOPERS NOTE:
+# --- The following (sed) edit is fragile in that, like a patch, it
+# --- depends on the driver having certain code constructs. If the
+# --- driver changes significantly, the following sed edit may fail,
+# --- and require updating.
+# --- In particular, we have taken care that the sed replacement with
+# --- the keyword *mode* below only replaces the first instance in the
+# --- file. Since this keyword is frequently shared among I/O APIs,
+# --- it is possible that new code introduced into the target file,
+# --- nozzle_timing.py, may cause this sed edit to edit the wrong call.
+
+# --- Edit the nozzle driver for:
+# ---- 20 steps
+# ---- no i/o
+# ---- desired file namings
 sed -e 's/\(nviz = \).*/\11000/g' \
     -e 's/\(nrestart = \).*/\11000/g' \
     -e 's/\(current_dt = \).*/\15e-8/g' \
@@ -60,7 +73,7 @@ sed -e 's/\(nviz = \).*/\11000/g' \
     -e 's/mode="wu"/mode="wo"/' \
     -e 's/\(casename = \).*/\1"nozzle-timing"/g' < ./nozzle.py > ./nozzle_timing.py
 
-# -- Get an MD5Sum for the untracked nozzle_timing driver
+# --- Get an MD5Sum for the untracked nozzle_timing driver
 DRIVER_MD5SUM="None"
 if command -v md5sum &> /dev/null
 then 
@@ -70,12 +83,16 @@ else
 fi
 
 # -- Run the case (platform-dependent)
-echo RUNNING
+printf "Running on Host: ${TIMING_HOST}\n"
+date
+GPU_ARCH="Unknown"
 case $TIMING_HOST in
 
     # --- Run the timing test in a batch job on Lassen@LLC
     lassen*)
-        printf "Host: Lassen\n"
+        echo "Resolved Host: Lassen"
+        TIMING_HOST="Lassen"
+        GPU_ARCH="GV100GL"
         rm -f nozzle_timing_job.sh
         rm -f timing-run-done
         # ---- Generate a batch script for running the timing job
@@ -120,6 +137,8 @@ EOF
         ;;
 esac
 
+date
+
 # -- Process the results of the timing run
 RUN_LOG_FILE='nozzle-timing-rank0.sqlite'
 if [[ -f "${RUN_LOG_FILE}" ]]; then
@@ -136,8 +155,8 @@ if [[ -f "${RUN_LOG_FILE}" ]]; then
 
     # --- Create a YAML-compatible text snippet with the timing info
     printf "run_date: ${TIMING_DATE}\nrun_host: ${TIMING_HOST}\n" > nozzle_timings.yaml
-    printf "run_epoch: ${TIME_SINCE_EPOCH}\n" >> nozzle_timings.yaml
-    printf "run_platform: ${TIMING_PLATFORM}\nrun_arch: ${TIMING_ARCH}\n" >> nozzle_timings.yaml
+    printf "run_epoch: ${TIME_SINCE_EPOCH}\nrun_platform: ${TIMING_PLATFORM}\n" >> nozzle_timings.yaml
+    printf "run_arch: ${TIMING_ARCH}\ngpu_arch: ${GPU_ARCH}\n" >> nozzle_timings.yaml
     printf "mirge_version: ${MIRGE_HASH}\ny1_version: ${Y1_HASH}\n" >> nozzle_timings.yaml
     printf "driver_version: ${DRIVER_HASH}\ndriver_md5sum: ${DRIVER_MD5SUM}\n" >> nozzle_timings.yaml
     printf "time_startup: ${STARTUP_TIME}\ntime_first_step: ${FIRST_STEP}\n" >> nozzle_timings.yaml
@@ -168,3 +187,5 @@ else
     printf "Timing run did not produce the expected sqlite file: ${RUN_LOG_FILE}\n"
     exit 1
 fi
+
+date
